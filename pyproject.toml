@@ -1,0 +1,23 @@
+[project]
+name = "dealerlens"
+version = "0.1.0"
+description = "Used-vehicle valuation with calibrated price ranges, explanations and depreciation outlook"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "lightgbm",
+    "numpy",
+    "pandas",
+    "requests",
+    "scikit-learn",
+    "streamlit",
+    "tabulate",
+    "uvicorn",
+]
+
+[dependency-groups]
+dev = ["pytest", "httpx", "jupyter", "matplotlib"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
