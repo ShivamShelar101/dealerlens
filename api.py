@@ -27,6 +27,9 @@ class AppraiseRequest(BaseModel):
     make: Optional[str] = None
     model: Optional[str] = None
     trim: Optional[str] = None
+    notes: Optional[str] = Field(None, description="inspection notes or listing description")
+    seller_type: Optional[str] = Field(None, description="leave empty to get both private-party and dealer-retail values")
+    paint_color: Optional[str] = None
     odometer: float = Field(..., gt=0)
     condition: Optional[str] = "good"
     title_status: Optional[str] = "clean"

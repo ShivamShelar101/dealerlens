@@ -15,6 +15,7 @@ from dealerlens import config
 from dealerlens.config import ALPHA, CAT_COLS, MONOTONE, NUM_COLS
 from dealerlens.data import fit_categories, split, to_X
 from dealerlens.metrics import conformal_q, interval_metrics, price_metrics
+from dealerlens.text import TextModel
 
 PARAMS = dict(learning_rate=0.05, num_leaves=127, min_data_in_leaf=50, feature_fraction=0.8,
               bagging_fraction=0.8, bagging_freq=1, cat_smooth=10, cat_l2=10,
@@ -44,10 +45,11 @@ def median_baseline(train, test):
 
 
 def ridge_baseline(train, test):
-    pre = ColumnTransformer([("num", StandardScaler(), NUM_COLS),
+    nums = [c for c in NUM_COLS if c != "text_score"]
+    pre = ColumnTransformer([("num", StandardScaler(), nums),
                              ("cat", OneHotEncoder(handle_unknown="ignore", min_frequency=20), CAT_COLS)])
-    m = make_pipeline(pre, Ridge(alpha=1.0)).fit(train[NUM_COLS + CAT_COLS], train["log_price"])
-    return np.exp(m.predict(test[NUM_COLS + CAT_COLS]))
+    m = make_pipeline(pre, Ridge(alpha=1.0)).fit(train[nums + CAT_COLS], train["log_price"])
+    return np.exp(m.predict(test[nums + CAT_COLS]))
 
 
 def segments(test, value, lo, hi):
@@ -76,8 +78,15 @@ def train(clean_df, out_dir=config.ARTIFACTS, reports_dir=config.REPORTS, quick=
     rep.mkdir(parents=True, exist_ok=True)
     rounds = 300 if quick else 5000
 
-    tr, va, ca, te = split(clean_df)
+    tr, va, ca, te = (d.copy() for d in split(clean_df))
     log(f"split: train={len(tr):,} valid={len(va):,} calib={len(ca):,} test={len(te):,}")
+
+    log("fitting listing-text model (out-of-fold on train)...")
+    text_model = TextModel()
+    tr["text_score"] = text_model.fit_oof(tr["text"].tolist(), tr["log_price"].values, tr["group"].values)
+    for d in (va, ca, te):
+        d["text_score"] = text_model.predict(d["text"].tolist())
+    text_only_te = price_metrics(te["price"].values, np.exp(te["text_score"].values))
     cats = fit_categories(tr)
     Xtr, Xva, Xca, Xte = (to_X(d, cats) for d in (tr, va, ca, te))
     ytr, yva = tr["log_price"].values, va["log_price"].values
@@ -100,6 +109,7 @@ def train(clean_df, out_dir=config.ARTIFACTS, reports_dir=config.REPORTS, quick=
     results = {
         "baseline_median_make_model_year": price_metrics(y, median_baseline(tr, te)),
         "baseline_ridge": price_metrics(y, ridge_baseline(tr, te)),
+        "text_only_ridge": text_only_te,
         "lightgbm": price_metrics(y, value),
         "interval_raw_quantiles": interval_metrics(y, np.exp(raw_lo), np.exp(raw_hi)),
         "interval_conformal": interval_metrics(y, lo, hi),
@@ -113,6 +123,7 @@ def train(clean_df, out_dir=config.ARTIFACTS, reports_dir=config.REPORTS, quick=
         "best_iterations": {"point": point.best_iteration, "lo": lo_m.best_iteration, "hi": hi_m.best_iteration},
         "metrics": results, "trained_seconds": round(time.time() - t0),
     }
+    text_model.save(out / "text_model.joblib")
     point.save_model(str(out / "point.txt"))
     lo_m.save_model(str(out / "lo.txt"))
     hi_m.save_model(str(out / "hi.txt"))
@@ -144,7 +155,8 @@ def write_metrics_md(r, seg, meta, path):
         "| Model | MAE | MAPE | Median APE | Within ±10% | Within ±20% |", "|---|---|---|---|---|---|",
         row("Median by make + model + year", r["baseline_median_make_model_year"]),
         row("Ridge regression (log price)", r["baseline_ridge"]),
-        row("**LightGBM (monotone in age & miles)**", r["lightgbm"]), "",
+        row("Listing text only (TF-IDF ridge)", r["text_only_ridge"]),
+        row("**LightGBM + text signal (monotone in age & miles)**", r["lightgbm"]), "",
         f"LightGBM MAE is **{gain:.1%} lower** than the make/model/year median baseline.", "",
         "## 80% price range", "", "| Method | Coverage (target 80%) | Mean width |", "|---|---|---|",
         f"| Raw quantile models | {r['interval_raw_quantiles']['coverage']:.1%} | ${r['interval_raw_quantiles']['mean_width']:,.0f} |",

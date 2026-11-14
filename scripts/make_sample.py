@@ -27,6 +27,9 @@ CARS = [  # make, model, base price new, yearly depreciation, type, cylinders, d
 ]
 COND = {"excellent": 1.05, "good": 1.0, "like new": 1.1, "fair": 0.8, "salvage": 0.5}
 STATES = ["ca", "tx", "fl", "ny", "wa", "oh", "co", "az"]
+GOOD = ["runs great", "one owner", "new tires", "clean carfax", "well maintained", "garage kept"]
+BAD = ["needs transmission", "check engine light on", "mechanic special", "minor body damage", "needs work"]
+COLORS = ["white", "black", "silver", "red", "blue", "grey"]
 
 p = argparse.ArgumentParser()
 p.add_argument("--n", type=int, default=20000)
@@ -45,10 +48,18 @@ for i in range(a.n):
     title = rng.choice(["clean", "rebuilt", "salvage"], p=[0.93, 0.05, 0.02])
     price = base * (1 - dep) ** age * np.exp(-odo / 250_000) * COND[cond]
     price *= {"clean": 1.0, "rebuilt": 0.75, "salvage": 0.55}[title]
-    price *= np.exp(rng.normal(0, 0.15))
+    seller = rng.choice(["dealer", "owner"], p=[0.6, 0.4])
+    price *= 1.12 if seller == "dealer" else 1.0
+    signal = rng.normal(0, 0.12)
+    phrases = list(rng.choice(GOOD if signal > 0 else BAD, size=2, replace=False))
+    price *= np.exp(signal) * np.exp(rng.normal(0, 0.08))
+    desc = f"For sale: {year} {make} {model}. " + ". ".join(phrases) + f". Asking ${round(price):,} obo."
     rows.append({"id": i, "price": round(price), "year": year, "manufacturer": make, "model": model,
                  "condition": cond, "cylinders": cyl, "fuel": "electric" if make == "tesla" else "gas",
                  "odometer": round(odo), "title_status": title, "transmission": "automatic",
-                 "drive": drive, "type": typ, "state": rng.choice(STATES), "VIN": f"SYN{i:014d}"})
+                 "drive": drive, "type": typ, "state": rng.choice(STATES), "VIN": f"SYN{i:014d}",
+                 "seller_type": seller, "paint_color": rng.choice(COLORS),
+                 "title": f"{year} {make.title()} {model.title()}", "description": desc,
+                 "odometer_broken": rng.random() < 0.005, "odometer_rolled_over": False})
 pd.DataFrame(rows).to_csv(a.out, index=False)
 print(f"wrote {a.n:,} synthetic listings to {a.out}")

@@ -23,6 +23,7 @@ def leaderboard(app, df, top_n=40, start_age=3, horizon=3, miles_per_year=12_000
         make, mk = pair.split("|")
         g = d[(d["make"] == make) & (d["model_key"] == mk)]
         typical = {c: g[c].mode().iat[0] for c in CAT_COLS}
+        typical["text_score"] = float(g["text_score"].median())
         car = {**typical, "make": make, "model_key": mk, "age": start_age,
                "odometer": start_age * miles_per_year}
         pts = curve(app, car, years=(0, horizon), miles_per_year=miles_per_year)

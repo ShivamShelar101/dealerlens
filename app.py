@@ -38,6 +38,8 @@ if st.sidebar.button("🎲 Random car from the test set"):
                             "title_status": r["title_status"], "state": r["state"],
                             "drive": r["drive"], "type": r["type"], "fuel": r["fuel"],
                             "cylinders": r["cylinders"], "transmission": r["transmission"],
+                            "paint_color": r["paint_color"], "seller_type": r["seller_type"],
+                            "notes": str(r.get("text", ""))[:600],
                             "_listed_price": int(r["price"])}
 car0 = st.session_state.car
 
@@ -56,6 +58,10 @@ with st.sidebar:
     titles = ["clean", "rebuilt", "salvage", "lien", "missing", "parts only"]
     title = st.selectbox("Title", titles, index=titles.index(car0.get("title_status", "clean")) if car0.get("title_status") in titles else 0)
     state = st.text_input("State (2 letters)", car0.get("state", "ca"))
+    colors = ["unknown"] + [c for c in app.categories.get("paint_color", []) if c != "unknown"]
+    paint = st.selectbox("Color", colors, index=colors.index(car0.get("paint_color")) if car0.get("paint_color") in colors else 0)
+    notes = st.text_area("Inspection notes / listing text (optional)", car0.get("notes", ""),
+                         placeholder="e.g. one owner, new tires, check engine light on, small dent rear bumper")
     st.header("Deal")
     price = st.number_input("Acquisition / asking price ($, optional)", 0, 500_000, 0, step=500)
     recon = st.number_input("Estimated recon cost ($)", 0, 50_000, 0, step=100)
@@ -69,6 +75,7 @@ if not go and "result" not in st.session_state:
 if go:
     car = {**{k: v for k, v in car0.items() if not k.startswith("_")},
            "year": year, "make": make, "model": model, "trim": trim, "odometer": odometer,
+           "paint_color": paint, "notes": notes,
            "condition": condition, "title_status": title, "state": state.lower()}
     if vin:  # let the VIN decode fill year/make/model/specs
         for k in ("year", "make", "model", "trim", "drive", "type", "fuel", "cylinders", "transmission"):
@@ -88,17 +95,31 @@ for w in r["warnings"]:
     st.warning(w)
 
 col1, col2, col3 = st.columns(3)
-col1.metric("Fair market value", f"${r['value']:,}")
-col2.metric("80% range", f"${r['low']:,} – ${r['high']:,}")
+if "private_party" in r:
+    pp, dr = r["private_party"], r["dealer_retail"]
+    col1.metric("Private-party value", f"${pp['value']:,}", help=f"80% range ${pp['low']:,} – ${pp['high']:,}")
+    col2.metric("Dealer retail value", f"${dr['value']:,}", f"+${r['retail_spread']:,} vs private",
+                help=f"80% range ${dr['low']:,} – ${dr['high']:,}")
+    st.caption(f"80% ranges: private ${pp['low']:,} – ${pp['high']:,} · retail ${dr['low']:,} – ${dr['high']:,}")
+else:
+    col1.metric("Fair market value", f"${r['value']:,}")
+    col2.metric("80% range", f"${r['low']:,} – ${r['high']:,}")
 in3 = r["depreciation"][-1]
 col3.metric("Projected value in 3 years", f"${in3['value']:,}", f"-{100 - in3['retained_pct']:.0f}%", delta_color="inverse")
 if car0.get("_listed_price") and not vin:
     st.caption(f"Actual listed price for this test-set car: ${car0['_listed_price']:,}")
 
+if r.get("text_signals"):
+    ts = r["text_signals"]
+    st.markdown("**From the notes:** " +
+                (" ".join(f":green[+ {p}]" for p in ts["raises_value"]) + " " +
+                 " ".join(f":red[− {p}]" for p in ts["lowers_value"])).strip())
+
 if "deal" in r:
     d = r["deal"]
     color = {"Buy": "green", "Negotiate": "orange", "Pass": "red"}[d["label"]]
-    st.markdown(f"### Deal score: :{color}[{d['label']}]")
+    st.markdown(f"### Deal score: :{color}[{d['label']}]  (vs. dealer retail value)" if "dealer_retail" in r
+                else f"### Deal score: :{color}[{d['label']}]")
     st.write(f"Expected margin **{d['expected_margin_pct']}%** on total cost ${d['total_cost']:,} · "
              f"probability market value exceeds cost **{d['prob_value_above_cost']:.0%}** · "
              f"max price for an 8% margin: **${d['max_price_for_target_margin']:,}**")

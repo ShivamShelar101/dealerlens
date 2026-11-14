@@ -8,7 +8,8 @@ import pandas as pd
 
 from dealerlens import config
 from dealerlens.config import CAT_COLS, DATA_YEAR, FEATURES, LABELS
-from dealerlens.data import model_key, to_X, trim_key
+from dealerlens.data import default_title, model_key, to_X, trim_key
+from dealerlens.text import TextModel, build_text
 
 
 class Appraiser:
@@ -22,6 +23,15 @@ class Appraiser:
         self.categories = self.meta["categories"]
         self.vocab = self.meta["model_vocab"]  # make -> known model keys
         self.trim_vocab = self.meta.get("trim_vocab", {})  # "make|model" -> known trim keys
+        self.text_model = TextModel.load(f / "text_model.joblib")
+        cats = self.categories.get("seller_type", [])
+        self.dealer_label = next((s for s in cats if "dealer" in s), None)
+        self.private_label = next((s for s in cats if "owner" in s or "private" in s), None)
+
+    def car_text(self, c):
+        """Listing-style text for a car: a title like the training listings, plus any notes."""
+        title = " ".join(str(x) for x in (c.get("year"), c.get("make"), c.get("model"), c.get("trim")) if x)
+        return build_text(title or default_title(None, c.get("make"), c.get("model")), None, c.get("notes"))
 
     def normalize(self, car):
         """Turn a user/VIN car dict into model features. Returns (features_dict, warnings)."""
@@ -47,8 +57,10 @@ class Appraiser:
         raw_trim = c.get("trim_key") or (str(c["trim"]).split()[0].lower().replace("-", "") if c.get("trim")
                                          else trim_key(c.get("model"), model_key(c.get("model"))))
         tk = raw_trim if raw_trim in self.trim_vocab.get(f"{make}|{mk}", []) else ("base" if raw_trim == "base" else "other")
-        f = {"age": age, "odometer": odo, "miles_per_year": odo / max(age, 0.5),
-             "make": make, "model_key": mk, "trim_key": tk}
+        text_score = float(c["text_score"]) if "text_score" in c else float(self.text_model.predict([self.car_text(c)])[0])
+        f = {"age": age, "odometer": odo, "miles_per_year": odo / max(age, 0.5), "text_score": text_score,
+             "make": make, "model_key": mk, "trim_key": tk,
+             "seller_type": str(c.get("seller_type") or self.dealer_label or "unknown").lower()}
         for col in CAT_COLS:
             if col not in f:
                 f[col] = str(c.get(col, "unknown")).lower().strip()
@@ -80,6 +92,8 @@ class Appraiser:
                 shown = f"{shown:,.0f} mi/yr"
             elif name == "age":
                 shown = f"{shown:.0f} yr"
+            elif name == "text_score":
+                shown = "notes provided" if car.get("notes") else "title only"
             out.append({"feature": LABELS[name], "value": shown,
                         "impact_usd": round(value * (1 - np.exp(-phi)))})  # effect vs. an average car
         return sorted(out, key=lambda r: -abs(r["impact_usd"]))[:top]

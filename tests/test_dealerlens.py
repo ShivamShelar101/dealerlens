@@ -176,3 +176,43 @@ def test_appraise_and_api(trained, monkeypatch):
     assert ok.status_code == 200 and ok.json()["value"] > 0
     bad = client.post("/appraise", json={"make": "honda", "odometer": 70000})
     assert bad.status_code == 400
+
+
+# ---------- listing text ----------
+from dealerlens.text import build_text, scrub  # noqa: E402
+
+
+@pytest.mark.parametrize("raw,must_not_contain,must_contain", [
+    ("Asking $12,500 OBO", ["12,500", "12500"], ["num"]),
+    ("price 9500 firm, 2015 camry", ["9500"], ["2015"]),
+    ("$8k cash only", ["8k"], ["num"]),
+    ("4wd v6, 2 owners, 85k miles", [], ["4wd", "v6", "2 owners"]),
+])
+def test_scrub_removes_prices_keeps_years(raw, must_not_contain, must_contain):
+    out = scrub(raw)
+    for s in must_not_contain:
+        assert s not in out
+    for s in must_contain:
+        assert s in out
+
+
+def test_build_text_skips_empty_parts():
+    assert build_text("2015 Toyota Camry", None, "  ") == "2015 Toyota Camry"
+
+
+def test_text_does_not_leak_price(trained):
+    # Synthetic descriptions contain "Asking $<price>". If scrubbing failed, text alone would be near-perfect.
+    _, results, _ = trained
+    assert results["text_only_ridge"]["within_10pct"] < 0.6
+
+
+def test_private_and_retail_values(trained, monkeypatch):
+    app, _, _ = trained
+    from dealerlens.appraise import appraise
+    out = appraise(app, car={"year": 2018, "make": "toyota", "model": "camry", "odometer": 50000,
+                             "notes": "one owner, new tires, runs great"}, with_risk=False)
+    assert out["dealer_retail"]["value"] > out["private_party"]["value"]  # synthetic dealers list 12% higher
+    assert out["text_signals"]["raises_value"]
+    bad = appraise(app, car={"year": 2018, "make": "toyota", "model": "camry", "odometer": 50000,
+                             "notes": "needs transmission, mechanic special"}, with_risk=False)
+    assert bad["value"] < out["value"]

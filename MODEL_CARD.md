@@ -12,6 +12,9 @@ Estimate the fair market (listing) value of a used passenger vehicle in the US, 
 - LightGBM regression on log price, monotone decreasing in age and mileage.
 - LightGBM quantile models (10th, 90th percentile) → conformal calibration on a separate split → 80% range.
 - Splits grouped by VIN.
+- Listing-text score: TF-IDF (1-2 grams) + ridge on title + description, prices scrubbed, out-of-fold on train; at inference it scores a generated title plus the dealer's notes.
+- Seller type (dealer vs private owner) is a feature, so the model reports both a private-party and a dealer-retail value.
+- Excluded on purpose: `monthly_payment` (≈ price / 60, leaks the target), image counts and URLs (listing artifacts).
 
 ## Results (held-out test set)
 _Paste `reports/metrics.md`._
@@ -25,6 +28,7 @@ _Fill in from `reports/segments.csv`: which price bands, ages, mileage bands and
 - **Self-reported fields.** Condition and title status come from sellers.
 - **No vehicle history.** Accidents, number of owners and service records aren't in the data; those are exactly what a vehicle-history product would add.
 - **Trim-level detail is coarse.** Models are normalized to a base name (e.g., "silverado"), so trims are pooled.
+- **Text at inference differs from training.** Training text is full listings (often dealer boilerplate); at inference it's a short title plus optional notes. The text effect is most reliable for clear condition phrases.
 - **NHTSA flags are heuristics.** Recall counts are by make/model/year, not by VIN, and don't show whether a recall was completed.
 
 ## Next steps
