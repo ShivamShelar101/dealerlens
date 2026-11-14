@@ -10,7 +10,7 @@ Estimate the fair market (listing) value of a used passenger vehicle in the US, 
 
 ## Model
 - LightGBM regression on log price, monotone decreasing in age and mileage.
-- LightGBM quantile models (10th, 90th percentile) → conformal calibration on a separate split → 80% range.
+- LightGBM quantile models (10th, 90th percentile) → conformal calibration on a separate split → 80% range. Calibration is done per predicted-price band (Mondrian conformal: <$10k, $10-20k, $20-35k, $35k+) so expensive cars aren't under-covered.
 - Splits grouped by VIN.
 - Listing-text score: TF-IDF (1-2 grams) + ridge on title + description, prices scrubbed, out-of-fold on train; at inference it scores a generated title plus the dealer's notes.
 - Seller type (dealer vs private owner) is a feature, so the model reports both a private-party and a dealer-retail value.
@@ -36,3 +36,9 @@ _Fill in from `reports/segments.csv`: which price bands, ages, mileage bands and
 - Add vehicle-history features (accidents, owners, service)
 - Trim-level matching from VIN decode
 - Monitor drift and interval coverage monthly
+
+## LLM components (copilot and memos)
+- The LLM never produces numbers on its own: values, ranges, comps and recalls come from tools.
+- Every dollar amount in an LLM answer is checked against tool output (within 1% or $50). Memos that fail the
+  check are replaced by a template; copilot answers show unverified amounts as a warning.
+- Default model is a local 4-bit Qwen2.5-7B via MLX, so vehicle data never leaves the machine.

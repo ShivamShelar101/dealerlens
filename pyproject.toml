@@ -1,13 +1,15 @@
 [project]
 name = "dealerlens"
 version = "0.1.0"
-description = "Used-vehicle valuation with calibrated price ranges, explanations and depreciation outlook"
+description = "Appraisal copilot for used-car dealers: calibrated valuations, comps, risk checks, tool-using agent"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi",
+    "joblib",
     "lightgbm",
     "numpy",
     "pandas",
+    "python-multipart",
     "requests",
     "scikit-learn",
     "streamlit",

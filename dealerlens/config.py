@@ -2,6 +2,7 @@ DATA_YEAR = 2026            # Listings were posted Sep-Nov 2026. Vehicle age = D
 ARTIFACTS = "artifacts"     # trained models + metadata
 REPORTS = "reports"         # metrics, segments, leaderboard
 ALPHA = 0.2                 # 1 - ALPHA = interval coverage target (80%)
+BAND_EDGES = [10_000, 20_000, 35_000]  # Mondrian conformal: calibrate each predicted-price band separately
 
 NUM_COLS = ["age", "odometer", "miles_per_year", "text_score"]
 CAT_COLS = ["make", "model_key", "trim_key", "condition", "title_status", "cylinders",

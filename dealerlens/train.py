@@ -12,9 +12,9 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from dealerlens import config
-from dealerlens.config import ALPHA, CAT_COLS, MONOTONE, NUM_COLS
+from dealerlens.config import ALPHA, BAND_EDGES, CAT_COLS, MONOTONE, NUM_COLS
 from dealerlens.data import fit_categories, split, to_X
-from dealerlens.metrics import conformal_q, interval_metrics, price_metrics
+from dealerlens.metrics import band_index, conformal_q, interval_metrics, mondrian_q, price_metrics
 from dealerlens.text import TextModel
 
 PARAMS = dict(learning_rate=0.05, num_leaves=127, min_data_in_leaf=50, feature_fraction=0.8,
@@ -58,6 +58,8 @@ def segments(test, value, lo, hi):
     t["covered"] = (t["price"] >= t["lo"]) & (t["price"] <= t["hi"])
     cuts = {
         "price_band": pd.cut(t["price"], [0, 10_000, 20_000, 35_000, 1e9], labels=["<10k", "10-20k", "20-35k", "35k+"]),
+        # What a dealer sees at appraisal time; Mondrian conformal targets coverage within these bands.
+        "predicted_band": pd.cut(t["pred"], [0, 10_000, 20_000, 35_000, 1e9], labels=["<10k", "10-20k", "20-35k", "35k+"]),
         "age_band": pd.cut(t["age"], [-1, 3, 7, 12, 100], labels=["0-3y", "4-7y", "8-12y", "13y+"]),
         "mileage_band": pd.cut(t["odometer"], [0, 50_000, 100_000, 150_000, 1e9], labels=["<50k", "50-100k", "100-150k", "150k+"]),
         "type": t["type"].where(t["type"].isin(t["type"].value_counts().head(6).index), "other"),
@@ -98,11 +100,15 @@ def train(clean_df, out_dir=config.ARTIFACTS, reports_dir=config.REPORTS, quick=
     hi_m = _fit("quantile", Xtr, ytr, Xva, yva, rounds, alpha=1 - ALPHA / 2)
 
     # Conformal calibration on a split the models never saw.
-    q = conformal_q(lo_m.predict(Xca), hi_m.predict(Xca), ca["log_price"].values, ALPHA)
+    # Global version (one widening for all cars) and Mondrian version (one per predicted-price band).
+    band_qs, q = mondrian_q(lo_m.predict(Xca), hi_m.predict(Xca), ca["log_price"].values,
+                            point.predict(Xca), BAND_EDGES, ALPHA)
     p_te = point.predict(Xte)
     raw_lo, raw_hi = lo_m.predict(Xte), hi_m.predict(Xte)
-    lo = np.exp(np.minimum(raw_lo - q, p_te))
-    hi = np.exp(np.maximum(raw_hi + q, p_te))
+    g_lo, g_hi = np.exp(np.minimum(raw_lo - q, p_te)), np.exp(np.maximum(raw_hi + q, p_te))
+    q_row = np.asarray(band_qs)[band_index(p_te, BAND_EDGES)]
+    lo = np.exp(np.minimum(raw_lo - q_row, p_te))
+    hi = np.exp(np.maximum(raw_hi + q_row, p_te))
     value = np.exp(p_te)
 
     y = te["price"].values
@@ -112,10 +118,11 @@ def train(clean_df, out_dir=config.ARTIFACTS, reports_dir=config.REPORTS, quick=
         "text_only_ridge": text_only_te,
         "lightgbm": price_metrics(y, value),
         "interval_raw_quantiles": interval_metrics(y, np.exp(raw_lo), np.exp(raw_hi)),
-        "interval_conformal": interval_metrics(y, lo, hi),
+        "interval_conformal_global": interval_metrics(y, g_lo, g_hi),
+        "interval_conformal": interval_metrics(y, lo, hi),  # Mondrian (per price band): what the app uses
     }
     meta = {
-        "conformal_q": q, "categories": cats, "alpha": ALPHA, "data_year": config.DATA_YEAR,
+        "conformal_q": q, "mondrian": {"edges": BAND_EDGES, "q": band_qs}, "categories": cats, "alpha": ALPHA, "data_year": config.DATA_YEAR,
         "model_vocab": {m: sorted(g["model_key"].unique().tolist()) for m, g in tr.groupby("make")},
         "trim_vocab": {f"{m}|{k}": sorted(g["trim_key"].unique().tolist())
                        for (m, k), g in tr.groupby(["make", "model_key"])},
@@ -129,6 +136,9 @@ def train(clean_df, out_dir=config.ARTIFACTS, reports_dir=config.REPORTS, quick=
     hi_m.save_model(str(out / "hi.txt"))
     (out / "meta.json").write_text(json.dumps(meta, indent=1))
     te.sample(min(300, len(te)), random_state=1).to_csv(out / "examples.csv", index=False)
+    comp_cols = [c for c in ("id", "year", "make", "model_key", "trim_key", "odometer", "price", "state",
+                             "seller_type", "title", "url") if c in clean_df]
+    clean_df[comp_cols].to_csv(out / "comps.csv.gz", index=False)  # lookup table for comparable listings
 
     (rep / "metrics.json").write_text(json.dumps(results, indent=1))
     seg = segments(te, value, lo, hi)
@@ -160,7 +170,8 @@ def write_metrics_md(r, seg, meta, path):
         f"LightGBM MAE is **{gain:.1%} lower** than the make/model/year median baseline.", "",
         "## 80% price range", "", "| Method | Coverage (target 80%) | Mean width |", "|---|---|---|",
         f"| Raw quantile models | {r['interval_raw_quantiles']['coverage']:.1%} | ${r['interval_raw_quantiles']['mean_width']:,.0f} |",
-        f"| **Conformal-calibrated** | {r['interval_conformal']['coverage']:.1%} | ${r['interval_conformal']['mean_width']:,.0f} |",
+        f"| Conformal, one global widening | {r['interval_conformal_global']['coverage']:.1%} | ${r['interval_conformal_global']['mean_width']:,.0f} |",
+        f"| **Conformal per price band (Mondrian)** | {r['interval_conformal']['coverage']:.1%} | ${r['interval_conformal']['mean_width']:,.0f} |",
         "", "## By segment", "", seg.to_markdown(index=False) if hasattr(seg, "to_markdown") else seg.to_string(index=False),
     ]
     path.write_text("\n".join(lines) + "\n")

@@ -36,9 +36,14 @@
   "mean_width": 6302.7976719935905,
   "mean_rel_width": 0.4864917849090777
  },
- "interval_conformal": {
+ "interval_conformal_global": {
   "coverage": 0.8009634333260346,
   "mean_width": 7439.046204034728,
   "mean_rel_width": 0.5651313584867033
+ },
+ "interval_conformal": {
+  "coverage": 0.8012261878694986,
+  "mean_width": 7451.79653813663,
+  "mean_rel_width": 0.5658662510409104
  }
 }

@@ -10,7 +10,7 @@ from dealerlens.text import build_text
 
 RAW_COLS = ["id", "price", "year", "manufacturer", "model", "condition", "cylinders", "fuel",
             "odometer", "title_status", "transmission", "drive", "type", "state", "VIN",
-            "title", "description", "seller_type", "paint_color", "odometer_broken", "odometer_rolled_over"]
+            "title", "description", "seller_type", "paint_color", "odometer_broken", "odometer_rolled_over", "url"]
 # Deliberately NOT used: monthly_payment (roughly price / 60, so it leaks the answer) and
 # image_count / url fields (listing artifacts a dealer appraising a car wouldn't have).
 

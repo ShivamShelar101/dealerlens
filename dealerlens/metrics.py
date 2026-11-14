@@ -22,3 +22,20 @@ def conformal_q(lo, hi, y, alpha):
     n = len(scores)
     level = min(1.0, np.ceil((n + 1) * (1 - alpha)) / n)
     return float(np.quantile(scores, level, method="higher"))
+
+
+def band_index(pred_log, edges):
+    """Price band of each prediction (bands are defined on the *predicted* value, known at inference)."""
+    return np.searchsorted(np.log(edges), pred_log, side="right")
+
+
+def mondrian_q(lo, hi, y, pred_log, edges, alpha, min_n=200):
+    """Per-band conformal widening. Bands with too few calibration rows fall back to the global value."""
+    lo, hi, y, pred_log = (np.asarray(a) for a in (lo, hi, y, pred_log))
+    global_q = conformal_q(lo, hi, y, alpha)
+    bands = band_index(pred_log, edges)
+    qs = []
+    for b in range(len(edges) + 1):
+        m = bands == b
+        qs.append(conformal_q(lo[m], hi[m], y[m], alpha) if m.sum() >= min_n else global_q)
+    return qs, global_q

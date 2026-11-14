@@ -171,11 +171,24 @@ def test_appraise_and_api(trained, monkeypatch):
     import api
     from fastapi.testclient import TestClient
     monkeypatch.setattr(api, "appraiser", lambda: app)
+    from dealerlens.comps import Comps
+    monkeypatch.setattr(api, "comps", lambda: Comps(tmp / "artifacts"))
     client = TestClient(api.app)
     ok = client.post("/appraise", json={"year": 2016, "make": "honda", "model": "civic", "odometer": 70000})
     assert ok.status_code == 200 and ok.json()["value"] > 0
     bad = client.post("/appraise", json={"make": "honda", "odometer": 70000})
     assert bad.status_code == 400
+    assert ok.json()["comps"]["count"] > 0
+    inv = "year,make,model,odometer,list_price\n2018,honda,civic,60000,15000\n"
+    up = client.post("/inventory", files={"file": ("inv.csv", inv, "text/csv")})
+    assert up.status_code == 200 and up.json()["summary"]["vehicles"] == 1
+    from dealerlens import llm
+    def down(*a, **k):
+        raise llm.LLMUnavailable("offline")
+    monkeypatch.setattr(llm, "chat", down)
+    assert client.post("/copilot", json={"question": "hi"}).status_code == 503
+    assert client.post("/memo", json={"year": 2016, "make": "honda", "model": "civic", "odometer": 70000,
+                                      "with_risk": False}).json()["source"] == "template"
 
 
 # ---------- listing text ----------
@@ -216,3 +229,125 @@ def test_private_and_retail_values(trained, monkeypatch):
     bad = appraise(app, car={"year": 2018, "make": "toyota", "model": "camry", "odometer": 50000,
                              "notes": "needs transmission, mechanic special"}, with_risk=False)
     assert bad["value"] < out["value"]
+
+
+# ---------- Mondrian conformal ----------
+def test_mondrian_fixes_under_covered_band():
+    from dealerlens.metrics import band_index, mondrian_q
+    rng = np.random.default_rng(1)
+    pred = np.log(rng.choice([5_000, 50_000], size=40_000))
+    noise = np.where(pred > np.log(20_000), 0.6, 0.2)          # expensive cars are noisier
+    y = pred + rng.normal(0, 1, len(pred)) * noise
+    lo, hi = pred - 0.2, pred + 0.2
+    edges = [10_000, 20_000, 35_000]
+    qs, gq = mondrian_q(lo[:20000], hi[:20000], y[:20000], pred[:20000], edges, alpha=0.2)
+    b = band_index(pred[20000:], edges)
+    q_row = np.asarray(qs)[b]
+    yt, lt, ht = y[20000:], lo[20000:], hi[20000:]
+    exp_mask = b == 3
+    cov_global = ((yt >= lt - gq) & (yt <= ht + gq))[exp_mask].mean()
+    cov_mondrian = ((yt >= lt - q_row) & (yt <= ht + q_row))[exp_mask].mean()
+    assert cov_global < 0.75 and 0.77 <= cov_mondrian <= 0.83
+
+
+# ---------- memo grounding ----------
+def test_grounding_check():
+    from dealerlens.memo import grounding_check
+    facts = {"value": 18754, "deal": {"max_price_for_target_margin": 16454}}
+    assert grounding_check("Retail $18,754, offer up to $16.5k", facts) == []      # rounding allowed
+    assert grounding_check("Worth $25,000", facts) == ["$25,000"]
+
+
+def test_memo_falls_back_without_llm(trained, monkeypatch):
+    from dealerlens import llm
+    from dealerlens.appraise import appraise
+    from dealerlens.memo import llm_memo
+    app, _, _ = trained
+
+    def down(*a, **k):
+        raise llm.LLMUnavailable("offline")
+    monkeypatch.setattr(llm, "chat", down)
+    r = appraise(app, car={"year": 2018, "make": "toyota", "model": "camry", "odometer": 50000}, price=12000, with_risk=False)
+    m = llm_memo(r)
+    assert m["source"] == "template" and "Recommendation" in m["memo"]
+
+
+def test_memo_rejects_invented_numbers(trained, monkeypatch):
+    from dealerlens import llm
+    from dealerlens.appraise import appraise
+    from dealerlens.memo import llm_memo
+    app, _, _ = trained
+    monkeypatch.setattr(llm, "chat", lambda *a, **k: "Buy it. Worth $99,999.")
+    r = appraise(app, car={"year": 2018, "make": "toyota", "model": "camry", "odometer": 50000}, with_risk=False)
+    assert llm_memo(r)["source"] == "template"
+
+
+# ---------- comps + inventory ----------
+def test_comps(trained):
+    from dealerlens.comps import Comps
+    _, _, tmp = trained
+    res = Comps(tmp / "artifacts").find({"year": 2018, "make": "honda", "model": "civic", "odometer": 60000}, k=5)
+    assert res["count"] == 5 and all(abs(it["year"] - 2018) <= 2 for it in res["items"])
+    assert Comps(tmp / "artifacts").find({"year": 2018, "make": "lada", "model": "niva", "odometer": 1})["count"] == 0
+
+
+def test_inventory(trained):
+    from dealerlens.batch import appraise_inventory, summarize
+    app, _, _ = trained
+    inv = pd.DataFrame({"stock": ["A1", "A2"], "year": [2018, 2015], "make": ["honda", "ford"],
+                        "model": ["civic", "f-150"], "odometer": [60000, 120000],
+                        "list_price": [99999, 1500], "cost": [9000, 1000]})
+    out = appraise_inventory(app, inv)
+    assert list(out["pricing_flag"]) == ["Above market: likely slow to sell", "Below market: leaving money on the table"]
+    assert summarize(out)["vehicles"] == 2
+    with pytest.raises(ValueError):
+        appraise_inventory(app, inv.drop(columns=["odometer"]))
+
+
+# ---------- agent ----------
+def test_copilot_tool_loop(trained, monkeypatch):
+    from dealerlens import llm
+    from dealerlens.agent import Copilot
+    from dealerlens.comps import Comps
+    app, _, tmp = trained
+    monkeypatch.setattr(nhtsa, "_get", lambda url, params=None: {"results": []})
+    nhtsa.recalls.cache_clear(); nhtsa.complaints.cache_clear()
+    car = '"year": 2018, "make": "honda", "model": "civic", "odometer": 60000'
+    script = iter([
+        '{"tool": "appraise_vehicle", "args": {' + car + ', "price": 9000}}',
+        '```json\n{"tool": "find_comparables", "args": {' + car + '}}\n```',
+        '{"tool": "check_safety", "args": {"year": 2018, "make": "honda", "model": "civic"}}',
+        None,  # final: filled in below from the appraisal
+    ])
+    seen = {}
+
+    def fake_chat(messages, **k):
+        nxt = next(script)
+        if nxt is None:
+            first = [m for m in messages if m["content"].startswith("Tool result (appraise_vehicle)")][0]
+            val = json.loads(first["content"].split("\n", 1)[1])["value"]
+            seen["val"] = val
+            return json.dumps({"final": f"Buy. Retail about ${val:,}. Also worth $77,777."})
+        return nxt
+    import json
+    monkeypatch.setattr(llm, "chat", fake_chat)
+    res = Copilot(app, Comps(tmp / "artifacts"), reports_dir=tmp / "reports").ask("2018 civic 60k miles for $9000?")
+    assert [t["tool"] for t in res["trace"]] == ["appraise_vehicle", "find_comparables", "check_safety"]
+    assert f"${seen['val']:,}" in res["answer"]
+    assert res["unverified"] == ["$77,777."] or res["unverified"] == ["$77,777"]
+
+
+def test_copilot_recovers_from_bad_tool(trained, monkeypatch):
+    from dealerlens import llm
+    from dealerlens.agent import Copilot
+    app, _, tmp = trained
+    script = iter(['{"tool": "teleport", "args": {}}', '{"final": "Sorry, I need the mileage."}'])
+    monkeypatch.setattr(llm, "chat", lambda messages, **k: next(script))
+    res = Copilot(app, None, reports_dir=tmp / "reports").ask("what's my car worth?")
+    assert "error" in res["trace"][0]["result"] and "mileage" in res["answer"]
+
+
+def test_notify_noop_without_webhook(monkeypatch):
+    from dealerlens.notify import post_to_slack
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    assert post_to_slack("hi")["sent"] is False

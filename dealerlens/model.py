@@ -9,6 +9,7 @@ import pandas as pd
 from dealerlens import config
 from dealerlens.config import CAT_COLS, DATA_YEAR, FEATURES, LABELS
 from dealerlens.data import default_title, model_key, to_X, trim_key
+from dealerlens.metrics import band_index
 from dealerlens.text import TextModel, build_text
 
 
@@ -73,8 +74,12 @@ class Appraiser:
         """Return arrays (value, low, high) in dollars. [low, high] is a calibrated 80% range."""
         X = self._X(cars)
         p = self.point.predict(X)
-        lo = np.minimum(self.lo.predict(X) - self.q, p)
-        hi = np.maximum(self.hi.predict(X) + self.q, p)
+        q = self.q
+        if "mondrian" in self.meta:  # per predicted-price band
+            m = self.meta["mondrian"]
+            q = np.asarray(m["q"])[band_index(p, m["edges"])]
+        lo = np.minimum(self.lo.predict(X) - q, p)
+        hi = np.maximum(self.hi.predict(X) + q, p)
         return np.exp(p), np.exp(lo), np.exp(hi)
 
     def explain(self, car, top=6):
