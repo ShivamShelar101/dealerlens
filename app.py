@@ -73,7 +73,7 @@ with st.sidebar:
     price = st.number_input("Acquisition price ($, optional)", 0, 500_000, 0, step=500)
     recon = st.number_input("Estimated recon cost ($)", 0, 50_000, 0, step=100)
     with_risk = st.checkbox("NHTSA recall & complaint check", True)
-    go = st.button("Appraise", type="primary", use_container_width=True)
+    go = st.button("Appraise", type="primary", width="stretch")
 
 tab_appraise, tab_copilot, tab_inventory, tab_market = st.tabs(["🔎 Appraise", "🤖 Copilot", "📋 Inventory", "📈 Market"])
 
@@ -149,7 +149,7 @@ with tab_appraise:
         if cp.get("count"):
             st.caption(f"Median ${cp['median_price']:,} · range ${cp['price_range'][0]:,} – ${cp['price_range'][1]:,}")
             cdf = pd.DataFrame(cp["items"])
-            st.dataframe(cdf, hide_index=True, use_container_width=True,
+            st.dataframe(cdf, hide_index=True, width="stretch",
                          column_config={"url": st.column_config.LinkColumn("listing"),
                                         "price": st.column_config.NumberColumn(format="$%d")})
         else:
@@ -249,7 +249,7 @@ with tab_inventory:
                 k3.metric("Expected gross (retail − cost)", f"${s['total_expected_gross']:,}")
             if "flags" in s:
                 st.write({k: v for k, v in s["flags"].items()})
-            st.dataframe(res, hide_index=True, use_container_width=True)
+            st.dataframe(res, hide_index=True, width="stretch")
             buf = io.StringIO()
             res.to_csv(buf, index=False)
             st.download_button("⬇️ Download repriced inventory", buf.getvalue(), file_name="inventory_appraised.csv")
@@ -262,6 +262,6 @@ with tab_inventory:
 # =====================================================================  Market
 with tab_market:
     st.markdown("#### Which models hold value best (typical 3-year-old example, next 3 years)")
-    st.dataframe(pd.read_csv("reports/leaderboard.csv"), hide_index=True, use_container_width=True)
+    st.dataframe(pd.read_csv("reports/leaderboard.csv"), hide_index=True, width="stretch")
     st.markdown("#### Model accuracy by segment")
-    st.dataframe(pd.read_csv("reports/segments.csv"), hide_index=True, use_container_width=True)
+    st.dataframe(pd.read_csv("reports/segments.csv"), hide_index=True, width="stretch")
